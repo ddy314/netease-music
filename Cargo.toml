@@ -1,0 +1,41 @@
+[package]
+name = "netease-music"
+version = "0.1.0"
+edition = "2021"
+description = "Rust client library for calling NetEase Cloud Music APIs"
+readme = "README.md"
+license-file = "LICENSE.md"
+repository = "https://github.com/ddy314/netease-music"
+keywords = ["netease", "music", "api", "client"]
+categories = ["api-bindings", "multimedia"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "LICENSE.md",
+    "README.md",
+    "examples/**",
+    "src/**",
+    "tests/**",
+]
+
+[lib]
+name = "netease_music"
+path = "src/lib.rs"
+
+[dependencies]
+aes = "0.8"
+base64 = "0.22"
+bytes = "1"
+cbc = "0.1"
+cipher = { version = "0.4", features = ["alloc"] }
+ecb = "0.1"
+flate2 = "1"
+hex = "0.4"
+md5 = "0.7"
+num-bigint = "0.4"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+url = "2"
