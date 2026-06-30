@@ -49,14 +49,17 @@ pub(crate) fn report_scrobble_v1(
     let total_time = params.total.filter(|&t| t > 0).unwrap_or(params.time);
     let song = json!({
         "id": song_id,
-        "bitrate": 320,
-        "level": "exhigh",
+        "name": params.name.as_deref().unwrap_or(""),
+        "artist": params.artist.as_deref().unwrap_or(""),
+        "bitrate": params.bitrate.unwrap_or(320),
+        "level": params.level.as_deref().unwrap_or("exhigh"),
+        "vip": params.vip.unwrap_or(false),
         "time": total_time,
     });
     let source = json!({
         "id": source_id,
         "type": "track",
-        "name": "list",
+        "name": params.source.as_deref().unwrap_or("list"),
     });
     let meta = build_meta_json(&ctx);
     let cookie = build_cookie_string(&ctx);
@@ -75,7 +78,7 @@ pub(crate) fn report_scrobble_v1(
         ));
     }
 
-    let played = params.time.min(total_time);
+    let played = total_time; // Always report full duration
     let pld_body = build_records(
         ts,
         "_pld",

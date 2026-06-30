@@ -113,6 +113,12 @@ pub struct ScrobbleParams {
     pub sourceid: String,
     pub time: u32,
     pub total: Option<u32>,
+    pub source: Option<String>,
+    pub name: Option<String>,
+    pub artist: Option<String>,
+    pub bitrate: Option<u32>,
+    pub level: Option<String>,
+    pub vip: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -747,6 +753,7 @@ mod tests {
             sourceid: "36780169".to_string(),
             time: 291,
             total: None,
+            ..Default::default()
         };
         let startplay: Value =
             serde_json::from_str(&scrobble_logs(&params, "startplay").unwrap()).unwrap();
