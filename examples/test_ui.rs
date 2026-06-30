@@ -228,7 +228,8 @@ fn recommend_songs(client: &NeteaseMusicClient) -> Value {
 
 fn status_json(client: &NeteaseMusicClient) -> Value {
     json!({
-        "loggedIn": client.cookie("MUSIC_U").is_some() || client.cookie("MUSIC_A").is_some(),
+        "loggedIn": client.cookie("MUSIC_U").is_some(),
+        "anonymous": client.cookie("MUSIC_A").is_some(),
         "csrf": client.cookie("__csrf").is_some(),
         "cookieNames": client.cookies().into_iter().map(|cookie| cookie.name).collect::<Vec<_>>(),
     })

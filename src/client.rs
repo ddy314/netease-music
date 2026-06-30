@@ -3,7 +3,7 @@ use flate2::read::ZlibDecoder;
 use rand::Rng;
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{
-    HeaderMap, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, SET_COOKIE, USER_AGENT,
+    HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, COOKIE, REFERER, SET_COOKIE, USER_AGENT,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -17,7 +17,10 @@ use crate::crypto::{eapi_params, linuxapi_params, to_json_value, weapi_params};
 use crate::{ApiResponse, Cookie, CryptoMode, RequestOptions, Result};
 
 const IOS_APP_VERSION: &str = "9.0.65";
+const PC_APP_VERSION: &str = "3.1.17.204416";
+const PC_OS_VERSION: &str = "Microsoft-Windows-10-Professional-build-19045-64bit";
 const MUSIC_HOST: &str = "https://music.163.com";
+const INTERFACE_HOST: &str = "https://interface.music.163.com";
 
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
@@ -112,9 +115,19 @@ impl NeteaseMusicClient {
 
     pub fn apply_request_strategy(&self) {
         self.set_cookie("os", "pc");
-        self.set_cookie("appver", "");
-        self.ensure_cookie("NMTID", random_alnum_hex(16));
+        self.set_cookie("appver", PC_APP_VERSION);
+        self.set_cookie("osver", PC_OS_VERSION);
+        self.set_cookie("channel", "netease");
+        self.set_cookie("WEVNSM", "1.0.0");
+        self.ensure_cookie("deviceId", self.device_id.clone());
+        self.ensure_cookie("WNMCID", create_wnmcid());
         self.ensure_cookie("_ntes_nuid", create_ntes_nuid());
+        if self.cookie("_ntes_nnid").is_none() {
+            if let Some(nuid) = self.cookie("_ntes_nuid") {
+                self.set_cookie("_ntes_nnid", create_ntes_nnid(&nuid));
+            }
+        }
+        self.ensure_cookie("NMTID", random_alnum_hex(16));
     }
 
     pub fn prepare_login_context(&self) {
@@ -143,7 +156,9 @@ impl NeteaseMusicClient {
             "POST",
             url,
             data,
-            RequestOptions::new(CryptoMode::Eapi).crypto_url(eapi_path(url)),
+            RequestOptions::new(CryptoMode::Eapi)
+                .mobile()
+                .crypto_url(eapi_path(url)),
         )
     }
 
@@ -153,6 +168,43 @@ impl NeteaseMusicClient {
 
     pub fn call_api(&self, url: &str, data: Value) -> Result<ApiResponse> {
         self.request("POST", url, data, RequestOptions::new(CryptoMode::None))
+    }
+
+    pub(crate) fn post_bytes(
+        &self,
+        url: &str,
+        headers: Vec<(&'static str, String)>,
+        body: Vec<u8>,
+    ) -> Result<ApiResponse> {
+        let mut header_map = HeaderMap::new();
+        for (name, value) in headers {
+            let name = HeaderName::from_static(name);
+            let value = HeaderValue::from_str(&value)
+                .map_err(|err| crate::NeteaseError::InvalidOption(err.to_string()))?;
+            header_map.insert(name, value);
+        }
+        let response = self
+            .http
+            .post(Url::parse(url)?)
+            .headers(header_map)
+            .body(body)
+            .send()?;
+        let status = response.status().as_u16();
+        let set_cookies = collect_set_cookies(response.headers());
+        for cookie in &set_cookies {
+            self.set_cookie(cookie.name.clone(), cookie.value.clone());
+        }
+        let raw = response.bytes()?;
+        let body = serde_json::from_slice::<Value>(&raw).unwrap_or(Value::Null);
+        let code = body.get("code").and_then(|code| code.as_i64());
+
+        Ok(ApiResponse {
+            status,
+            code,
+            body,
+            raw,
+            cookies: set_cookies,
+        })
     }
 
     pub fn request(
@@ -188,11 +240,11 @@ impl NeteaseMusicClient {
                 if let Value::Object(ref mut map) = data {
                     map.insert("header".to_string(), to_json_value(header.clone()));
                 }
-                for (name, value) in header {
-                    self.set_cookie(name, value.as_str().unwrap_or_default().to_string());
-                }
+                let cookie = HeaderValue::from_str(&encoded_cookie_header(&header))
+                    .map_err(|err| crate::NeteaseError::InvalidOption(err.to_string()))?;
+                headers.insert(COOKIE, cookie);
                 form = eapi_params(&crypto_url, &data)?;
-                target_url = replace_api_segment(&target_url, "/eapi/");
+                target_url = eapi_url(&target_url);
             }
             CryptoMode::None => {
                 if let Value::Object(map) = data {
@@ -267,9 +319,10 @@ impl NeteaseMusicClient {
         mut req: RequestBuilder,
         headers: HeaderMap,
     ) -> Result<RequestBuilder> {
+        let has_cookie = headers.contains_key(COOKIE);
         req = req.headers(headers);
         let cookie_header = self.cookie_header();
-        if !cookie_header.is_empty() {
+        if !has_cookie && !cookie_header.is_empty() {
             req = req.header(COOKIE, cookie_header);
         }
         Ok(req)
@@ -281,6 +334,29 @@ impl NeteaseMusicClient {
         cookies.insert("__remember_me".to_string(), "true".to_string());
         cookies.entry("os".to_string()).or_insert(os);
         cookies.entry("appver".to_string()).or_insert(appver);
+        cookies
+            .entry("osver".to_string())
+            .or_insert_with(|| PC_OS_VERSION.to_string());
+        cookies
+            .entry("channel".to_string())
+            .or_insert_with(|| "netease".to_string());
+        cookies
+            .entry("WEVNSM".to_string())
+            .or_insert_with(|| "1.0.0".to_string());
+        cookies
+            .entry("deviceId".to_string())
+            .or_insert_with(|| self.device_id.clone());
+        cookies
+            .entry("WNMCID".to_string())
+            .or_insert_with(create_wnmcid);
+        let nuid = cookies
+            .entry("_ntes_nuid".to_string())
+            .or_insert_with(create_ntes_nuid)
+            .clone();
+        cookies
+            .entry("_ntes_nnid".to_string())
+            .or_insert_with(|| create_ntes_nnid(&nuid));
+        cookies.insert("NMTID".to_string(), random_alnum_hex(16));
         cookies
             .into_iter()
             .map(|(name, value)| format!("{name}={value}"))
@@ -295,6 +371,12 @@ impl NeteaseMusicClient {
 
     fn eapi_cookie_header(&self) -> BTreeMap<String, Value> {
         let cookies = self.cookies.lock().expect("cookie lock");
+        let os = cookies
+            .get("os")
+            .cloned()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "pc".to_string());
+        let (default_os, default_appver, default_osver, default_channel) = os_defaults(&os);
         let get = |name: &str, fallback: &str| {
             Value::String(
                 cookies
@@ -304,9 +386,9 @@ impl NeteaseMusicClient {
             )
         };
         let mut header = BTreeMap::new();
-        header.insert("osver".to_string(), get("osver", "17.4.1"));
+        header.insert("osver".to_string(), get("osver", default_osver));
         header.insert("deviceId".to_string(), get("deviceId", &self.device_id));
-        header.insert("appver".to_string(), get("appver", IOS_APP_VERSION));
+        header.insert("appver".to_string(), get("appver", default_appver));
         header.insert("versioncode".to_string(), get("versioncode", "140"));
         header.insert("mobilename".to_string(), get("mobilename", ""));
         header.insert(
@@ -315,23 +397,33 @@ impl NeteaseMusicClient {
         );
         header.insert("resolution".to_string(), get("resolution", "1920x1080"));
         header.insert("__csrf".to_string(), get("__csrf", ""));
-        header.insert("os".to_string(), get("os", "ios"));
-        header.insert("channel".to_string(), get("channel", ""));
+        header.insert("os".to_string(), get("os", default_os));
+        header.insert("channel".to_string(), get("channel", default_channel));
+        if let Some(value) = cookies.get("MUSIC_U").filter(|value| !value.is_empty()) {
+            header.insert("MUSIC_U".to_string(), Value::String(value.clone()));
+        }
+        if let Some(value) = cookies.get("MUSIC_A").filter(|value| !value.is_empty()) {
+            header.insert("MUSIC_A".to_string(), Value::String(value.clone()));
+        }
         header.insert(
             "requestId".to_string(),
             Value::String(format!(
-                "{}{}",
+                "{}_{:04}",
                 now_millis(),
                 rand::thread_rng().gen_range(0..1000)
             )),
         );
-        if let Some(value) = cookies.get("MUSIC_U") {
-            header.insert("MUSIC_U".to_string(), Value::String(value.clone()));
-        }
-        if let Some(value) = cookies.get("MUSIC_A") {
-            header.insert("MUSIC_A".to_string(), Value::String(value.clone()));
-        }
         header
+    }
+}
+
+fn os_defaults(os: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+    match os {
+        "android" => ("android", "8.20.20.231215173437", "14", "xiaomi"),
+        "ios" | "iphone" | "iPhone OS" => ("iPhone OS", "9.0.90", "16.2", "distribution"),
+        "osx" => ("osx", "3.1.10.5100", "15.5", "netease"),
+        "linux" => ("linux", "1.2.1.0428", "Deepin 20.9", "netease"),
+        _ => ("pc", PC_APP_VERSION, PC_OS_VERSION, "netease"),
     }
 }
 
@@ -340,10 +432,10 @@ fn os_and_appver_from(cookies: &HashMap<String, String>) -> (String, String) {
         .get("os")
         .cloned()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "ios".to_string());
+        .unwrap_or_else(|| "pc".to_string());
     let appver = cookies.get("appver").cloned().unwrap_or_else(|| {
         if os == "pc" {
-            String::new()
+            PC_APP_VERSION.to_string()
         } else {
             IOS_APP_VERSION.to_string()
         }
@@ -375,6 +467,35 @@ pub(crate) fn eapi_path(url: &str) -> String {
     Url::parse(url)
         .map(|parsed| parsed.path().to_string())
         .unwrap_or_else(|_| url.to_string())
+}
+
+fn eapi_url(url: &str) -> String {
+    let rewritten = replace_api_segment(url, "/eapi/");
+    match Url::parse(&rewritten) {
+        Ok(mut parsed) if parsed.domain() == Some("music.163.com") => {
+            if let Ok(interface) = Url::parse(INTERFACE_HOST) {
+                let _ = parsed.set_scheme(interface.scheme());
+                let _ = parsed.set_host(interface.host_str());
+            }
+            parsed.to_string()
+        }
+        _ => rewritten,
+    }
+}
+
+fn encoded_cookie_header(header: &BTreeMap<String, Value>) -> String {
+    header
+        .iter()
+        .filter_map(|(name, value)| value.as_str().map(|value| (name, value)))
+        .map(|(name, value)| {
+            format!(
+                "{}={}",
+                url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>(),
+                url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn stringify_json_value(value: Value) -> String {
@@ -423,6 +544,22 @@ fn random_alnum(len: usize) -> String {
 
 fn random_alnum_hex(len: usize) -> String {
     hex::encode(random_alnum(len).as_bytes())
+}
+
+fn create_wnmcid() -> String {
+    format!("{}.{}.01.0", random_lowercase(6), now_millis())
+}
+
+fn random_lowercase(len: usize) -> String {
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
+    let mut rng = rand::thread_rng();
+    (0..len)
+        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
+        .collect()
+}
+
+fn create_ntes_nnid(nuid: &str) -> String {
+    format!("{nuid},{}", now_millis())
 }
 
 fn create_ntes_nuid() -> String {
@@ -484,6 +621,32 @@ mod tests {
     }
 
     #[test]
+    fn eapi_url_uses_interface_host_for_music_domain() {
+        assert_eq!(
+            eapi_url("https://music.163.com/api/song/enhance/player/url/v1"),
+            "https://interface.music.163.com/eapi/song/enhance/player/url/v1"
+        );
+        assert_eq!(
+            eapi_url("http://127.0.0.1:3000/api/test"),
+            "http://127.0.0.1:3000/eapi/test"
+        );
+    }
+
+    #[test]
+    fn eapi_header_keeps_auth_cookie_and_osx_defaults() {
+        let client = NeteaseMusicClient::new().unwrap();
+        client.set_cookie("os", "osx");
+        client.set_cookie("MUSIC_U", "token");
+
+        let header = client.eapi_cookie_header();
+
+        assert_eq!(header["os"], "osx");
+        assert_eq!(header["appver"], "3.1.10.5100");
+        assert_eq!(header["osver"], "15.5");
+        assert_eq!(header["MUSIC_U"], "token");
+    }
+
+    #[test]
     fn client_generates_chain_id_with_device_id() {
         let client = NeteaseMusicClient::new().unwrap();
         let chain_id = client.chain_id();
@@ -497,7 +660,11 @@ mod tests {
         let header = client.cookie_header();
         assert!(header.contains("__remember_me=true"));
         assert!(header.contains("sDeviceId="));
-        assert!(header.contains("os=ios"));
+        assert!(header.contains("os=pc"));
+        assert!(header.contains("appver=3.1.17.204416"));
+        assert!(header.contains("deviceId="));
+        assert!(header.contains("WNMCID="));
+        assert!(header.contains("_ntes_nnid="));
     }
 
     #[test]
@@ -510,13 +677,17 @@ mod tests {
         let header = client.cookie_header();
 
         assert_eq!(client.cookie("os").as_deref(), Some("pc"));
-        assert_eq!(client.cookie("appver").as_deref(), Some(""));
+        assert_eq!(client.cookie("appver").as_deref(), Some(PC_APP_VERSION));
+        assert_eq!(client.cookie("osver").as_deref(), Some(PC_OS_VERSION));
+        assert_eq!(client.cookie("channel").as_deref(), Some("netease"));
         assert_ne!(nmtid, "some_random_id_from_strategy");
         assert_eq!(nmtid.len(), 32);
         assert_eq!(nuid.len(), 32);
         assert!(header.contains("os=pc"));
+        assert!(header.contains("appver=3.1.17.204416"));
         assert!(header.contains("NMTID="));
         assert!(header.contains("_ntes_nuid="));
+        assert!(header.contains("_ntes_nnid="));
     }
 
     #[test]
@@ -527,6 +698,6 @@ mod tests {
         let headers = client.base_headers(crate::request::UserAgentKind::Pc);
 
         assert_eq!(headers.get("os").unwrap(), "pc");
-        assert!(headers.get("appver").is_none());
+        assert_eq!(headers.get("appver").unwrap(), PC_APP_VERSION);
     }
 }

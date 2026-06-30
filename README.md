@@ -2,13 +2,10 @@
 
 Rust client library for calling NetEase Cloud Music APIs.
 
-This crate is a Rust rewrite of the reusable `service` and `util` package from
-`github.com/go-musicfox/netease-music`, itself derived from
-[sirodeneko/NeteaseCloudMusicApiWithGo](https://github.com/sirodeneko/NeteaseCloudMusicApiWithGo).
-The old Go package used a global cookie jar and many service structs. This
-crate exposes a stateful `NeteaseMusicClient` instead, so cookies, device
-identifiers, timeout settings, proxy settings, and request encryption are owned
-by one client instance.
+This crate follows the request behavior of `NeteaseCloudMusicApi@4.32.0` while
+exposing a stateful Rust `NeteaseMusicClient`, so cookies, device identifiers,
+timeout settings, proxy settings, and request encryption are owned by one client
+instance.
 
 UNM / music unlocking is intentionally not included. Use an external proxy or a
 separate integration if you need that behavior.
@@ -17,13 +14,14 @@ separate integration if you need that behavior.
 
 - `weapi`, `eapi`, `linuxapi`, and raw mobile API request helpers.
 - Stateful cookie handling, including `Set-Cookie` capture.
-- NetEase login context modeled after the Go project: `sDeviceId`, QR
-  `chainId`, PC login cookies, randomized `NMTID`, and browser-like
-  `_ntes_nuid`.
+- NetEase login context modeled after current NeteaseCloudMusicApi behavior:
+  PC login cookies for weapi and interface-host eapi requests with encoded
+  client header cookies.
 - Wrapped APIs for login, QR login, captcha, search, suggestions, hot search,
   account info, banners, personalized playlists, recommendations, sign-in, song
-  URLs, lyrics, playlist detail, full playlist tracks, song detail, user detail,
-  user playlists, and like lists.
+  URLs, lyrics, scrobble playback reporting, playlist detail, full playlist
+  tracks, song detail, user detail, user playlists, like lists, recent records,
+  and listen-data reports.
 - Raw helpers for endpoints not yet wrapped as first-class Rust methods.
 
 ## Install
@@ -94,6 +92,9 @@ fn main() -> Result<()> {
 Use the same `NeteaseMusicClient` instance for QR key generation and polling so
 the login cookies and device identifiers stay consistent.
 
+`login_qr_key()` returns the PC QR URL. Use `login_qr_url(key, Some("web"))` if
+you specifically need the web `chainId` URL.
+
 ## Raw APIs
 
 Use raw helpers while a specific endpoint wrapper is not yet available:
@@ -123,15 +124,20 @@ Available raw helpers:
 
 ## Wrapped APIs
 
-- Login: `login_cellphone`, `login_qr_key`, `login_qr_check`,
-  `login_refresh`, `logout`
+- Login: `login_cellphone`, `login_qr_key`, `login_qr_url`,
+  `login_qr_check`, `login_status`, `login_refresh`, `logout`,
+  `register_anonymous`
 - Captcha: `captcha_sent`, `captcha_verify`
 - Discovery/search: `search`, `search_suggest`, `search_hot_detail`,
   `banner`, `personalized`, `recommend_songs`, `recommend_resource`
-- Library/playback: `song_url`, `song_url_v1`, `lyric`, `playlist_detail`,
+- Library/playback: `song_url`, `song_url_v1`, `lyric`, `scrobble`,
+  `record_recent_song`, `recent_listen_list`, `playlist_detail`,
   `playlist_track_all`, `song_detail`
 - User/account: `account`, `user_detail`, `user_playlist`, `like_list`,
   `daily_signin`
+- Listen data: `listen_data_report`, `listen_data_realtime_report`,
+  `listen_data_total`, `listen_data_today_song_play_rank`,
+  `listen_data_year_report`
 
 ## Development
 

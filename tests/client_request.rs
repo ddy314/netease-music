@@ -106,6 +106,31 @@ fn weapi_request_rewrites_api_path_and_encrypts_form() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn eapi_request_uses_eapi_path_and_header_cookie() -> Result<()> {
+    let Some((base_url, rx)) = optional_server("")? else {
+        return Ok(());
+    };
+    let client = NeteaseMusicClient::new()?;
+
+    let response = client.eapi_with_path(
+        &format!("{base_url}/api/content/activity/listen/data/total"),
+        "/api/content/activity/listen/data/total",
+        json!({}),
+    )?;
+
+    assert_eq!(response.code, Some(200));
+    let request = rx.recv().expect("captured request");
+    assert!(request.starts_with("POST /eapi/content/activity/listen/data/total HTTP/1.1"));
+    assert!(request.contains("Cookie: "));
+    assert!(request.contains("requestId="));
+    assert!(request.contains("appver=3.1.17.204416"));
+    assert!(request.contains("params="));
+    assert!(!request.contains("encSecKey="));
+    assert!(!request.contains("__remember_me=true"));
+    Ok(())
+}
+
 fn optional_server(
     response_headers: &'static str,
 ) -> Result<Option<(String, mpsc::Receiver<String>)>> {
