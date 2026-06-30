@@ -45,7 +45,7 @@ pub(crate) fn report_scrobble_v1(
     } else {
         params.sourceid.as_str()
     };
-    let total_time = params.total.unwrap_or(params.time);
+    let total_time = params.total.filter(|&t| t > 0).unwrap_or(params.time);
     let song = json!({
         "id": song_id,
         "bitrate": 320,
@@ -402,7 +402,7 @@ fn gzip(body: &[u8]) -> Result<Vec<u8>> {
 
 fn multipart(boundary: &str, file_name: &str, payload: &[u8]) -> Vec<u8> {
     let head = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: multipart/form-data\r\n\r\n\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: multipart/form-data\r\n\r\n"
     );
     let tail = format!("\r\n--{boundary}--\r\n");
     [head.as_bytes(), payload, tail.as_bytes()].concat()
@@ -514,6 +514,28 @@ fn now_secs() -> u64 {
 mod tests {
     use super::*;
 
+    fn test_ctx() -> Ctx {
+        Ctx {
+            app_version: "3.1.17".to_string(),
+            app_version_code: "204416".to_string(),
+            app_channel: "netease".to_string(),
+            app_nsm: "1.0.0".to_string(),
+            app_cid: "test.100.01.0".to_string(),
+            device_id: "TEST-DEVICE-ID".to_string(),
+            device_ti: "TEST-NMTID".to_string(),
+            device_sign: "TEST-SIGN".to_string(),
+            device_model: "TEST-MODEL".to_string(),
+            device_nnid: "test,123".to_string(),
+            device_nuid: "testnuid".to_string(),
+            device_csrf: "testcsrf".to_string(),
+            device_os: "pc".to_string(),
+            device_osver: "Microsoft-Windows-10-Professional-build-19045-64bit".to_string(),
+            auth_token: "TEST-MUSIC-U".to_string(),
+            auth_session: "TEST-SESSION".to_string(),
+            auth_vip_type: "".to_string(),
+        }
+    }
+
     #[test]
     fn ncbl_payload_has_magic_header() {
         let payload = encrypt_ncbl(b"{}", b"1\x01_plv\x01{}").unwrap();
@@ -527,5 +549,104 @@ mod tests {
             build_records(7, "_pld", json!({"id":1})),
             "7\x01_pld\x01{\"id\":1}"
         );
+    }
+
+    #[test]
+    fn plv_json_fields_match_js_implementation() {
+        let ctx = test_ctx();
+        let song = json!({"id": 518066366, "bitrate": 320, "level": "exhigh", "time": 291});
+        let source = json!({"id": "36780169", "type": "track", "name": "list"});
+        let plv = build_plv(&ctx, &song, &source);
+        let plv_obj = plv.as_object().unwrap();
+
+        assert_eq!(plv_obj["mode"], "circulation");
+        assert_eq!(plv_obj["download"], 0);
+        assert_eq!(plv_obj["alg"], "");
+        assert_eq!(plv_obj["status"], "front");
+        assert_eq!(plv_obj["id"], "518066366");
+        assert_eq!(plv_obj["bitrate"], 320);
+        assert_eq!(plv_obj["type"], "song");
+        assert_eq!(plv_obj["is_listentogether"], 0);
+        assert_eq!(plv_obj["source"], "list");
+        assert_eq!(plv_obj["is_heart"], 0);
+        assert_eq!(plv_obj["resource_ratio"], "");
+        assert_eq!(plv_obj["resource_time"], 291);
+        assert_eq!(plv_obj["musiceffect_id"], "");
+        assert_eq!(plv_obj["app_mode"], 2);
+        assert_eq!(plv_obj["bitrate_level"], "exhigh");
+        assert_eq!(plv_obj["vipType"], "");
+        assert_eq!(plv_obj["fee"], 1);
+        assert_eq!(plv_obj["file"], 4);
+        assert_eq!(plv_obj["rightSource"], 0);
+        assert_eq!(plv_obj["sourceId"], "36780169");
+        assert_eq!(plv_obj["sourcetype"], "track");
+        assert_eq!(plv_obj["libra_abt"], "");
+        assert_eq!(plv_obj["channel"], "netease");
+        assert_eq!(plv_obj["curStartChannel"], "");
+
+        let addrefer = plv_obj["_addrefer"].as_str().unwrap();
+        assert!(addrefer.contains("36780169:list::"), "addrefer missing source id: {addrefer}");
+        assert!(addrefer.contains("518066366:song:x:x"), "addrefer missing song id: {addrefer}");
+        assert!(!addrefer.contains('"'), "addrefer has JSON quotes: {addrefer}");
+
+        let multirefs = plv_obj["_multirefers"].as_array().unwrap();
+        assert_eq!(multirefs.len(), 5, "expected 5 multirefs entries, got {}", multirefs.len());
+    }
+
+    #[test]
+    fn pld_json_fields_match_js_implementation() {
+        let ctx = test_ctx();
+        let song = json!({"id": 518066366, "bitrate": 320, "level": "exhigh", "time": 291});
+        let source = json!({"id": "36780169", "type": "track", "name": "list"});
+        let pld = build_pld(&ctx, &song, &source, 149);
+        let pld_obj = pld.as_object().unwrap();
+
+        assert_eq!(pld_obj["time"], 149);
+        assert_eq!(pld_obj["realtime"], 149);
+        assert_eq!(pld_obj["resource_time"], 291);
+        assert_eq!(pld_obj["end"], "interrupt");
+        assert_eq!(pld_obj["musiceffect_id"], "1001");
+        assert_eq!(pld_obj["app_mode"], 1);
+        assert_eq!(pld_obj["lyriceffect"], "default");
+        assert_eq!(pld_obj["displayMode"], "classic");
+
+        let addrefer = pld_obj["_addrefer"].as_str().unwrap();
+        assert!(addrefer.contains("36780169:list::"), "addrefer missing source id: {addrefer}");
+        assert!(!addrefer.contains('"'), "addrefer has JSON quotes: {addrefer}");
+    }
+
+    #[test]
+    fn meta_json_contains_required_keys() {
+        let ctx = test_ctx();
+        let meta = build_meta_json(&ctx);
+        let meta_val: Value = serde_json::from_str(&meta).unwrap();
+        let meta_obj = meta_val.as_object().unwrap();
+
+        assert_eq!(meta_obj["MUSIC_U"], "TEST-MUSIC-U");
+        assert_eq!(meta_obj["os"], "pc");
+        assert_eq!(meta_obj["appver"], "3.1.17.204416");
+        assert_eq!(meta_obj["deviceId"], "TEST-DEVICE-ID");
+    }
+
+    #[test]
+    fn cookie_string_contains_required_cookies() {
+        let ctx = test_ctx();
+        let cookie = build_cookie_string(&ctx);
+        assert!(cookie.contains("MUSIC_U=TEST-MUSIC-U"));
+        assert!(cookie.contains("os=pc"));
+        assert!(cookie.contains("appver=3.1.17.204416"));
+        assert!(cookie.contains("deviceId=TEST-DEVICE-ID"));
+        assert!(!cookie.contains("3.1.17.204416.205293"), "double-combined appver: {cookie}");
+    }
+
+    #[test]
+    fn zero_total_falls_back_to_time_like_js() {
+        let ctx = test_ctx();
+        let song = json!({"id": 1, "bitrate": 320, "level": "exhigh", "time": 80});
+        let source = json!({"id": "123", "type": "track", "name": "list"});
+        let pld = build_pld(&ctx, &song, &source, 80);
+        assert_eq!(pld["time"], 80);
+        assert_eq!(pld["realtime"], 80);
+        assert_eq!(pld["resource_time"], 80);
     }
 }
