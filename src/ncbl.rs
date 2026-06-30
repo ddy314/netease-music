@@ -39,6 +39,7 @@ pub(crate) fn report_scrobble_v1(
     let song_id = params.id.parse::<u64>().map_err(|_| {
         NeteaseError::InvalidOption("scrobble id must be a numeric song id".to_string())
     })?;
+    client.apply_request_strategy();
     let ctx = Ctx::from_cookies(client.cookies())?;
     let source_id = if params.sourceid.is_empty() {
         params.id.as_str()
@@ -64,7 +65,14 @@ pub(crate) fn report_scrobble_v1(
     let plv_body = build_records(ts, "_plv", build_plv(&ctx, &song, &source));
     let plv = upload(client, &ctx, &meta, &plv_body, &cookie)?;
     if !upload_success(&plv) {
-        return Ok(plv);
+        let rate_info = plv.body.pointer("/response/data/rate")
+            .and_then(Value::as_i64)
+            .map(|r| format!(" (rate={r})")
+            ).unwrap_or_default();
+        return Ok(api_response(
+            200,
+            json!({"code": -1, "msg": format!("PLV upload rejected{rate_info}"), "details": plv.body}),
+        ));
     }
 
     let played = params.time.min(total_time);
@@ -82,7 +90,7 @@ pub(crate) fn report_scrobble_v1(
     if !upload_success(&pld) {
         return Ok(api_response(
             200,
-            json!({"code": pld.code.unwrap_or(-1), "msg": "PLV succeeded but PLD failed", "details": {"plv": plv.body, "pld": pld.body}}),
+            json!({"code": -1, "msg": "PLV succeeded but PLD upload rejected", "details": {"plv": plv.body, "pld": pld.body}}),
         ));
     }
 
