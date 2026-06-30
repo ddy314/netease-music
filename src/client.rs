@@ -17,7 +17,8 @@ use crate::crypto::{eapi_params, linuxapi_params, to_json_value, weapi_params};
 use crate::{ApiResponse, Cookie, CryptoMode, RequestOptions, Result};
 
 const IOS_APP_VERSION: &str = "9.0.65";
-const PC_APP_VERSION: &str = "3.1.17.204416";
+const PC_APP_VERSION: &str = "3.1.17";
+const PC_VERSION_CODE: &str = "204416";
 const PC_OS_VERSION: &str = "Microsoft-Windows-10-Professional-build-19045-64bit";
 const MUSIC_HOST: &str = "https://music.163.com";
 const INTERFACE_HOST: &str = "https://interface.music.163.com";
@@ -116,6 +117,7 @@ impl NeteaseMusicClient {
     pub fn apply_request_strategy(&self) {
         self.set_cookie("os", "pc");
         self.set_cookie("appver", PC_APP_VERSION);
+        self.set_cookie("versioncode", PC_VERSION_CODE);
         self.set_cookie("osver", PC_OS_VERSION);
         self.set_cookie("channel", "netease");
         self.set_cookie("WEVNSM", "1.0.0");
@@ -661,7 +663,7 @@ mod tests {
         assert!(header.contains("__remember_me=true"));
         assert!(header.contains("sDeviceId="));
         assert!(header.contains("os=pc"));
-        assert!(header.contains("appver=3.1.17.204416"));
+        assert!(header.contains("appver=3.1.17"));
         assert!(header.contains("deviceId="));
         assert!(header.contains("WNMCID="));
         assert!(header.contains("_ntes_nnid="));
@@ -678,13 +680,14 @@ mod tests {
 
         assert_eq!(client.cookie("os").as_deref(), Some("pc"));
         assert_eq!(client.cookie("appver").as_deref(), Some(PC_APP_VERSION));
+        assert_eq!(client.cookie("versioncode").as_deref(), Some(PC_VERSION_CODE));
         assert_eq!(client.cookie("osver").as_deref(), Some(PC_OS_VERSION));
         assert_eq!(client.cookie("channel").as_deref(), Some("netease"));
         assert_ne!(nmtid, "some_random_id_from_strategy");
         assert_eq!(nmtid.len(), 32);
         assert_eq!(nuid.len(), 32);
         assert!(header.contains("os=pc"));
-        assert!(header.contains("appver=3.1.17.204416"));
+        assert!(header.contains("appver=3.1.17"));
         assert!(header.contains("NMTID="));
         assert!(header.contains("_ntes_nuid="));
         assert!(header.contains("_ntes_nnid="));

@@ -45,11 +45,12 @@ pub(crate) fn report_scrobble_v1(
     } else {
         params.sourceid.as_str()
     };
+    let total_time = params.total.unwrap_or(params.time);
     let song = json!({
         "id": song_id,
         "bitrate": 320,
         "level": "exhigh",
-        "time": params.time,
+        "time": total_time,
     });
     let source = json!({
         "id": source_id,
@@ -66,6 +67,7 @@ pub(crate) fn report_scrobble_v1(
         return Ok(plv);
     }
 
+    let played = params.time.min(total_time);
     let pld_body = build_records(
         ts,
         "_pld",
@@ -73,7 +75,7 @@ pub(crate) fn report_scrobble_v1(
             &ctx,
             &song,
             &source,
-            params.time.min(song["time"].as_u64().unwrap_or(0) as u32),
+            played,
         ),
     );
     let pld = upload(client, &ctx, &meta, &pld_body, &cookie)?;
@@ -155,7 +157,7 @@ fn build_plv(ctx: &Ctx, song: &Value, source: &Value) -> Value {
         "download": 0,
         "alg": "",
         "status": "front",
-        "id": song["id"].to_string(),
+        "id": val_str(&song["id"]),
         "bitrate": song["bitrate"],
         "type": "song",
         "is_listentogether": 0,
@@ -166,8 +168,14 @@ fn build_plv(ctx: &Ctx, song: &Value, source: &Value) -> Value {
         "musiceffect_id": "",
         "app_mode": 2,
         "bitrate_level": song["level"],
-        "_addrefer": format!("[F:63][{now}#933#{}#{}#c9156c3][e][2][23][cell_pc_songlist_song:2|page_pc_songlist_songflow|page_mine_like_music][{}:song:x:x|:::|{}:list::]", ctx.app_version, ctx.app_version_code, song["id"], source["id"]),
-        "_multirefers": ["[F:26][s][18][_ai]", "[F:26][s][12][_ai]", "[F:26][s][5][_ai]", "[F:26][s][0][_ai]"],
+        "_addrefer": format!("[F:63][{now}#933#{}#{}#c9156c3][e][2][23][cell_pc_songlist_song:2|page_pc_songlist_songflow|page_mine_like_music][{}:song:x:x|:::|{}:list::]", ctx.app_version, ctx.app_version_code, val_str(&song["id"]), val_str(&source["id"])),
+        "_multirefers": [
+            "[F:26][s][18][_ai]",
+            "[F:26][s][12][_ai]",
+            format!("[F:63][{now}#933#{}#{}#c9156c3][e][2][8][cell_pc_main_tab_entrance:6|page_pc_main_tab][我喜欢的音乐:spm::|:::]", ctx.app_version, ctx.app_version_code),
+            "[F:26][s][5][_ai]",
+            "[F:26][s][0][_ai]",
+        ],
         "vipType": ctx.auth_vip_type,
         "fee": 1,
         "file": 4,
@@ -187,7 +195,7 @@ fn build_pld(ctx: &Ctx, song: &Value, source: &Value, played: u32) -> Value {
         "download": 0,
         "alg": "",
         "status": "front",
-        "id": song["id"].to_string(),
+        "id": val_str(&song["id"]),
         "time": played,
         "type": "song",
         "is_listentogether": 0,
@@ -202,7 +210,7 @@ fn build_pld(ctx: &Ctx, song: &Value, source: &Value, played: u32) -> Value {
         "displayMode": "classic",
         "bitrate": song["bitrate"],
         "bitrate_level": song["level"],
-        "_addrefer": format!("[F:63][{now}#616#{}#{}#c9156c3][e][2][92][btn_pc_cover_play|cell_pc_songlist_song:6|page_pc_songlist_songflow|page_mine_like_music][:::|{}:song:x:x|:::|{}:list::]", ctx.app_version, ctx.app_version_code, song["id"], source["id"]),
+        "_addrefer": format!("[F:63][{now}#616#{}#{}#c9156c3][e][2][92][btn_pc_cover_play|cell_pc_songlist_song:6|page_pc_songlist_songflow|page_mine_like_music][:::|{}:song:x:x|:::|{}:list::]", ctx.app_version, ctx.app_version_code, val_str(&song["id"]), val_str(&source["id"])),
         "_multirefers": ["[F:26][s][87][_ai]", "[F:26][s][81][_ai]", "[F:26][s][75][_ai]", "[F:26][s][69][_ai]", "[F:26][s][63][_ai]"],
         "vipType": ctx.auth_vip_type,
         "fee": 8,
@@ -248,6 +256,7 @@ fn upload(
                 "user-agent",
                 format!("Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/{}", ctx.app_version),
             ),
+            ("accept-encoding", "gzip,deflate".to_string()),
             ("accept-language", "zh-CN,zh;q=0.8".to_string()),
             ("cookie", cookie.to_string()),
         ],
@@ -480,6 +489,14 @@ fn random_bytes(len: usize) -> Vec<u8> {
 
 fn random_hex(len: usize) -> String {
     hex::encode(random_bytes(len))
+}
+
+fn val_str(val: &Value) -> String {
+    match val {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => val.to_string(),
+    }
 }
 
 fn now_millis() -> u128 {
