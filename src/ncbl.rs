@@ -1,8 +1,6 @@
-use flate2::{write::GzEncoder, Compression};
 use num_bigint::BigUint;
 use rand::{rngs::OsRng, Rng, RngCore};
 use serde_json::{json, Value};
-use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::services::ScrobbleParams;
@@ -68,27 +66,20 @@ pub(crate) fn report_scrobble_v1(
     let plv_body = build_records(ts, "_plv", build_plv(&ctx, &song, &source));
     let plv = upload(client, &ctx, &meta, &plv_body, &cookie)?;
     if !upload_success(&plv) {
-        let rate_info = plv.body.pointer("/response/data/rate")
+        let rate_info = plv
+            .body
+            .pointer("/response/data/rate")
             .and_then(Value::as_i64)
-            .map(|r| format!(" (rate={r})")
-            ).unwrap_or_default();
+            .map(|r| format!(" (rate={r})"))
+            .unwrap_or_default();
         return Ok(api_response(
             200,
             json!({"code": -1, "msg": format!("PLV upload rejected{rate_info}"), "details": plv.body}),
         ));
     }
 
-    let played = total_time; // Always report full duration
-    let pld_body = build_records(
-        ts,
-        "_pld",
-        build_pld(
-            &ctx,
-            &song,
-            &source,
-            played,
-        ),
-    );
+    let played = params.time.min(total_time);
+    let pld_body = build_records(ts, "_pld", build_pld(&ctx, &song, &source, played));
     let pld = upload(client, &ctx, &meta, &pld_body, &cookie)?;
     if !upload_success(&pld) {
         return Ok(api_response(
@@ -99,7 +90,14 @@ pub(crate) fn report_scrobble_v1(
 
     Ok(api_response(
         200,
-        json!({"code": 200, "data": "scrobble_v1 success", "details": {"plv": plv.body, "pld": pld.body}}),
+        json!({
+            "code": 200,
+            "data": "scrobble_v1 success",
+            "details": {
+                "plv": {"fileName": plv.body["fileName"], "payloadSize": plv.body["payloadSize"]},
+                "pld": {"fileName": pld.body["fileName"], "payloadSize": pld.body["payloadSize"]},
+            },
+        }),
     ))
 }
 
@@ -312,7 +310,7 @@ fn encrypt_ncbl(meta: &[u8], body: &[u8]) -> Result<Vec<u8>> {
     meta_block.extend_from_slice(&(meta_cipher.len() as u16).to_le_bytes());
     meta_block.extend_from_slice(&meta_cipher);
 
-    let compressed = gzip(body)?;
+    let compressed = zstd_compress(body)?;
     let mut trailing = Vec::new();
     let mut seq = base_seq;
     for chunk in compressed.chunks(0x8000) {
@@ -405,10 +403,8 @@ fn rsa_wrap(key: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn gzip(body: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(body)?;
-    Ok(encoder.finish()?)
+fn zstd_compress(body: &[u8]) -> Result<Vec<u8>> {
+    Ok(zstd::stream::encode_all(body, 0)?)
 }
 
 fn multipart(boundary: &str, file_name: &str, payload: &[u8]) -> Vec<u8> {
@@ -555,6 +551,14 @@ mod tests {
     }
 
     #[test]
+    fn body_compression_matches_js_zstd_path() {
+        let body = b"1\x01_plv\x01{}";
+        let compressed = zstd_compress(body).unwrap();
+        assert_eq!(&compressed[..4], &[0x28, 0xb5, 0x2f, 0xfd]);
+        assert_eq!(zstd::stream::decode_all(compressed.as_slice()).unwrap(), body);
+    }
+
+    #[test]
     fn record_shape_matches_clientlog_format() {
         assert_eq!(
             build_records(7, "_pld", json!({"id":1})),
@@ -596,12 +600,26 @@ mod tests {
         assert_eq!(plv_obj["curStartChannel"], "");
 
         let addrefer = plv_obj["_addrefer"].as_str().unwrap();
-        assert!(addrefer.contains("36780169:list::"), "addrefer missing source id: {addrefer}");
-        assert!(addrefer.contains("518066366:song:x:x"), "addrefer missing song id: {addrefer}");
-        assert!(!addrefer.contains('"'), "addrefer has JSON quotes: {addrefer}");
+        assert!(
+            addrefer.contains("36780169:list::"),
+            "addrefer missing source id: {addrefer}"
+        );
+        assert!(
+            addrefer.contains("518066366:song:x:x"),
+            "addrefer missing song id: {addrefer}"
+        );
+        assert!(
+            !addrefer.contains('"'),
+            "addrefer has JSON quotes: {addrefer}"
+        );
 
         let multirefs = plv_obj["_multirefers"].as_array().unwrap();
-        assert_eq!(multirefs.len(), 5, "expected 5 multirefs entries, got {}", multirefs.len());
+        assert_eq!(
+            multirefs.len(),
+            5,
+            "expected 5 multirefs entries, got {}",
+            multirefs.len()
+        );
     }
 
     #[test]
@@ -622,8 +640,14 @@ mod tests {
         assert_eq!(pld_obj["displayMode"], "classic");
 
         let addrefer = pld_obj["_addrefer"].as_str().unwrap();
-        assert!(addrefer.contains("36780169:list::"), "addrefer missing source id: {addrefer}");
-        assert!(!addrefer.contains('"'), "addrefer has JSON quotes: {addrefer}");
+        assert!(
+            addrefer.contains("36780169:list::"),
+            "addrefer missing source id: {addrefer}"
+        );
+        assert!(
+            !addrefer.contains('"'),
+            "addrefer has JSON quotes: {addrefer}"
+        );
     }
 
     #[test]
@@ -647,7 +671,10 @@ mod tests {
         assert!(cookie.contains("os=pc"));
         assert!(cookie.contains("appver=3.1.17.204416"));
         assert!(cookie.contains("deviceId=TEST-DEVICE-ID"));
-        assert!(!cookie.contains("3.1.17.204416.205293"), "double-combined appver: {cookie}");
+        assert!(
+            !cookie.contains("3.1.17.204416.205293"),
+            "double-combined appver: {cookie}"
+        );
     }
 
     #[test]
@@ -659,5 +686,16 @@ mod tests {
         assert_eq!(pld["time"], 80);
         assert_eq!(pld["realtime"], 80);
         assert_eq!(pld["resource_time"], 80);
+    }
+
+    #[test]
+    fn pld_played_time_is_capped_like_js() {
+        let ctx = test_ctx();
+        let song = json!({"id": 1, "bitrate": 320, "level": "exhigh", "time": 240});
+        let source = json!({"id": "123", "type": "track", "name": "list"});
+        let pld = build_pld(&ctx, &song, &source, 90u32.min(240));
+        assert_eq!(pld["time"], 90);
+        assert_eq!(pld["realtime"], 90);
+        assert_eq!(pld["resource_time"], 240);
     }
 }
