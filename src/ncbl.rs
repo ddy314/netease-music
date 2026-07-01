@@ -555,7 +555,10 @@ mod tests {
         let body = b"1\x01_plv\x01{}";
         let compressed = zstd_compress(body).unwrap();
         assert_eq!(&compressed[..4], &[0x28, 0xb5, 0x2f, 0xfd]);
-        assert_eq!(zstd::stream::decode_all(compressed.as_slice()).unwrap(), body);
+        assert_eq!(
+            zstd::stream::decode_all(compressed.as_slice()).unwrap(),
+            body
+        );
     }
 
     #[test]

@@ -26,24 +26,17 @@ separate integration if you need that behavior.
 
 ## Install
 
-From git:
+From crates.io:
 
 ```toml
 [dependencies]
-netease-music = { git = "https://github.com/ddy314/netease-music.git" }
+netease-music = "0.1.1"
 ```
 
 For local development:
 
 ```shell
 cargo add --path .
-```
-
-After publishing to crates.io:
-
-```toml
-[dependencies]
-netease-music = "0.1"
 ```
 
 ## Usage

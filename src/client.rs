@@ -680,7 +680,10 @@ mod tests {
 
         assert_eq!(client.cookie("os").as_deref(), Some("pc"));
         assert_eq!(client.cookie("appver").as_deref(), Some(PC_APP_VERSION));
-        assert_eq!(client.cookie("versioncode").as_deref(), Some(PC_VERSION_CODE));
+        assert_eq!(
+            client.cookie("versioncode").as_deref(),
+            Some(PC_VERSION_CODE)
+        );
         assert_eq!(client.cookie("osver").as_deref(), Some(PC_OS_VERSION));
         assert_eq!(client.cookie("channel").as_deref(), Some("netease"));
         assert_ne!(nmtid, "some_random_id_from_strategy");
